@@ -90,6 +90,7 @@
 #include "executor/nodeGroup.h"
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
+#include "executor/nodeNWayHashJoin.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeLimit.h"
@@ -454,7 +455,8 @@ ExecProcNode(PlanState *node)
 			break;
 
 		case T_HashJoinState:
-			result = ExecHashJoin((HashJoinState *) node);
+			//result = ExecHashJoin((HashJoinState *) node);
+			result = ExecNWayHashJoin((HashJoinState *) node);
 			break;
 
 			/*
