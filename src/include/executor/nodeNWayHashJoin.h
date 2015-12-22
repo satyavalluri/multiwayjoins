@@ -18,6 +18,11 @@
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
 
+//#define INDIRECT_HASH_TABLE_SIZE 1048576
+//#define INDIRECT_HASH_TABLE_SIZE 65536
+//#define INDIRECT_HASH_TABLE_SIZE 2097152
+#define INDIRECT_HASH_TABLE_SIZE 4194304
+
 typedef struct NWayHashTable
 {
         int                     nbuckets;       /* # buckets in the in-memory hash table */
@@ -30,6 +35,7 @@ typedef struct NWayHashTable
         int                     nbatch;         /* number of batches */
 
         double          totalTuples;    /* # tuples obtained from inner plan */
+        int			      curbatch;		/* current batch #; 0 during 1st pass */
 
         /* These arrays are allocated for the life of the hash join, but only if
 	 * nbatch > 1.  A file is opened only when we first write a tuple into it
@@ -39,12 +45,14 @@ typedef struct NWayHashTable
  	 */
         BufFile   **batchFile; /* buffered virtual temp file per batch */
 
+        int **indirectHashTable;
+
         /*
  	 * Info about the datatype-specific hash functions for the datatypes being
  	 * hashed. These are arrays of the same length as the number of hash join
  	 * clauses (hash keys).
  	 */
-        FmgrInfo   *hashfunctions;        /* lookup data for hash functions */
+        FmgrInfo   hashfunction;        /* lookup data for hash functions */
 
         MemoryContext hashCxt;          /* context for whole-hash-join storage */
         MemoryContext batchCxt;         /* context for this-batch-only storage */
