@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * nodeHashjoin.c
+ * nodeNWayHashJoin.c
  *	  Routines to handle hash join nodes
  *
  * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
@@ -8,10 +8,12 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/executor/nodeHashjoin.c
+ *	  src/backend/executor/nodeNWayHashJoin.c
  *
  *-------------------------------------------------------------------------
  */
+
+#include <sys/time.h>
 
 #include "postgres.h"
 
@@ -82,6 +84,15 @@ bool NWayLoadNextBatchFile(NWayHashTable **hashtable, TupleTableSlot *tupSlot);
 void NWayBatchReset(NWayHashTable **hashtable);
 TupleTableSlot *NWayGetSavedTuple(BufFile *file, uint32 *hashvalue, TupleTableSlot *tupleSlot);
 
+bool NWayGetKeyValue(ExprContext *econtext, List *hashkeys, FmgrInfo   hashfunction, Datum *keyval);
+bool NWayComputeActualJoinProbeTable2(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int attrNo1, int attrNo2, 
+				      Datum inKey, Datum *outKey, int *outBucket);
+bool NWayComputeActualJoinProbeTable1(NWayHashTable *hashtable, ExprContext *econtext, List *hashkeys, TupleTableSlot *tupSlot,
+		 		      int bucketno, Datum inKey);
+int NWayComputeActualJoin(NWayHashTable *hashtable1, ExprContext *econtext1, List *hashkeys1, TupleTableSlot *tupSlot1,
+		          NWayHashTable *hashtable2, TupleTableSlot *tupSlot2, int attr2No1, int attr2No2,
+			  NWayHashTable *hashtable3, TupleTableSlot *tupSlot3, int attr3);
+
 TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NULL */
 {
 	PlanState  *outerNode, *outerNode1, *outerNode2, *outerNode3;
@@ -91,6 +102,7 @@ TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NUL
     NWayHashTable *hashTable1, *hashTable2, *hashTable3;
     int table2attr1, table2attr2, table3attr;
     int i;
+		struct timeval  tvm1, tvm2;
 
 	printf("ExecNWayHashJoin node.type: %d\n", node->js.ps.type);
 
@@ -123,6 +135,7 @@ TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NUL
 		printf("outerNode2.RelName: %s\n", RelationGetRelationName(seqScan->ss_currentRelation));
 	}
 
+		gettimeofday(&tvm1, NULL);
 	NWayChooseHashTableSize(outerNode1, &nbuckets, &nbatch);
 	printf("1 - nbuckets: %d - nbatch: %d\n",nbuckets, nbatch);
 
@@ -142,12 +155,12 @@ TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NUL
 
 	 printf("3 - nbuckets2: %d - nbatch2: %d - nbuckets: %d - nbatch: %d\n",nbuckets2, nbatch2, nbuckets, nbatch);
 
-	 printf("Scanning outerTable1");
+	 //printf("Scanning outerTable1");
 	 hashTable1 = NWayCreateHashTable(nbuckets, nbatch);
 	 NWaySetHashFunction(&hashTable1, node->hj_HashOperators, true);
 	 NWayBuildHashTable1(&hashTable1, outerNode1, hashNode->ps.ps_ExprContext, hashNode->hashkeys);
-	 printf("PrintBuckets1\n");
-	 NWayPrintBuckets1(hashTable1, hashNode->ps.ps_ExprContext, hashNode->hashkeys, node->hj_HashTupleSlot);
+	 //printf("PrintBuckets1\n");
+	 //NWayPrintBuckets1(hashTable1, hashNode->ps.ps_ExprContext, hashNode->hashkeys, node->hj_HashTupleSlot);
 
 	 if (!NWayFindKeys(node->hj_OuterHashKeys, outerNode3, &table2attr1) )
 	 {
@@ -169,14 +182,52 @@ TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NUL
 	 hashTable2 = NWayCreateHashTable(nbuckets, nbatch);
 	 NWaySetHashFunction(&hashTable2, node2->hj_HashOperators, false);
 	 NWayBuildHashTable2(&hashTable2, outerNode3, hashTable1->hashfunction, table2attr1, table2attr2);
-	 printf("PrintBuckets2\n");
-	 NWayPrintBuckets2(hashTable2, outerNode3->ps_ResultTupleSlot, table2attr1, table2attr2);
+	 //printf("PrintBuckets2\n");
+	 //NWayPrintBuckets2(hashTable2, outerNode3->ps_ResultTupleSlot, table2attr1, table2attr2);
 
 	 hashTable3 = NWayCreateHashTable(nbuckets, nbatch);
 	 NWayBuildHashTable3(&hashTable3, outerNode2, hashTable2->indirectHashTable, hashTable2->hashfunction, table3attr);
-	 printf("PrintBuckets3\n");
-	 NWayPrintBuckets3(hashTable3, outerNode2->ps_ResultTupleSlot, table3attr);
+	 //printf("PrintBuckets3\n");
+	 //NWayPrintBuckets3(hashTable3, outerNode2->ps_ResultTupleSlot, table3attr);
 
+		gettimeofday(&tvm2, NULL);
+		printf ("Build time = %f seconds\n", (double) (tvm2.tv_usec - tvm1.tv_usec) / 1000000 + (double) (tvm2.tv_sec - tvm1.tv_sec));
+#if 0
+	if(1)
+	{
+		List *myList = NULL;
+		List *myList2;
+		ListCell *lc;
+		
+		for(i=10; i<40; i=i+5)
+		{
+			printf("Insertion: %d\n",i);
+			myList = lappend_oid(myList, (Oid)i);
+		}
+
+		myList2 = myList;
+		foreach(lc, myList2)
+		{
+			Oid val = lfirst_oid(lc);
+			int val2 = (int) val;
+			printf("Val: %u - val2: %d\n",val, val2);
+			//myList = myList->next;
+		}
+	}
+#endif
+	if(1)
+	{
+		struct timeval  tv1, tv2;
+		gettimeofday(&tv1, NULL);
+		int joincount = NWayComputeActualJoin(hashTable1, hashNode->ps.ps_ExprContext, hashNode->hashkeys, node->hj_HashTupleSlot,
+			      			      hashTable2, outerNode3->ps_ResultTupleSlot, table2attr1, table2attr2,
+			      			      hashTable3, outerNode2->ps_ResultTupleSlot, table3attr);
+		gettimeofday(&tv2, NULL);
+		printf("Join Count: %d\n",joincount);
+		printf ("Join time = %f seconds\n", (double) (tv2.tv_usec - tv1.tv_usec) / 1000000 + (double) (tv2.tv_sec - tv1.tv_sec));
+	}
+
+/*
 	 for(i=1; i<nbatch; i++)
 	 {
 		 printf("Table 1 - LoadBatch%d\n",i);
@@ -192,6 +243,7 @@ TupleTableSlot * ExecNWayHashJoin(HashJoinState *node) /* return: a tuple or NUL
 		 printf("Table 3 - PrintBatch%d\n",i);
 		 NWayPrintBuckets3(hashTable3, outerNode2->ps_ResultTupleSlot, table3attr);
 	 }
+*/
 
 #if 0
 	 printf("Table 1 - LoadBatch1\n");
@@ -601,7 +653,7 @@ bool NWayGetHashValue(ExprContext *econtext, List *hashkeys, FmgrInfo   hashfunc
 		 */
 		keyval = ExecEvalExpr(keyexpr, econtext, &isNull, NULL);
 
-		printf("KeyVal: %lu - ", (unsigned long) keyval);
+		//printf("KeyVal: %lu - ", (unsigned long) keyval);
 		/*
 		 * If the attribute is NULL, and the join operator is strict, then
 		 * this tuple cannot pass the join qual so we can reject it
@@ -631,9 +683,41 @@ bool NWayGetHashValue(ExprContext *econtext, List *hashkeys, FmgrInfo   hashfunc
 
 	MemoryContextSwitchTo(oldContext);
 
-	printf("HashValue: %lu\n", (unsigned long) hashkey);
+	//printf("HashValue: %lu\n", (unsigned long) hashkey);
 	*hashvalue = hashkey;
 	return true;
+}
+
+bool NWayGetKeyValue(ExprContext *econtext, List *hashkeys, FmgrInfo   hashfunction, Datum *keyval)
+{
+	ListCell   *hk;
+	MemoryContext oldContext;
+	bool success = false;
+
+	/*
+	 * We reset the eval context each time to reclaim any memory leaked in the
+	 * hashkey expressions.
+	 */
+	ResetExprContext(econtext);
+
+	oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+	foreach(hk, hashkeys)
+	{
+		ExprState  *keyexpr = (ExprState *) lfirst(hk);
+		bool		isNull;
+
+		/*
+		 * Get the join attribute value of the tuple
+		 */
+		(*keyval) = ExecEvalExpr(keyexpr, econtext, &isNull, NULL);
+		Assert (isNULL == false);
+		success = true;
+	}
+
+	MemoryContextSwitchTo(oldContext);
+
+	return success;
 }
 
 void NWayGetBucketAndBatch(NWayHashTable *hashtable, uint32 hashvalue,
@@ -690,7 +774,7 @@ void NWayHashTableInsert(NWayHashTable **hashtable, TupleTableSlot *slot,
 {
 	int bucketno, batchno;
 	NWayGetBucketAndBatch(*hashtable, hashvalue, &bucketno, &batchno);
-	printf("HashValue: %lu - bucketno: %d - batchno: %d - ", (unsigned long) hashvalue,  bucketno, batchno);
+	//printf("HashValue: %lu - bucketno: %d - batchno: %d - ", (unsigned long) hashvalue,  bucketno, batchno);
 	//printf("--> bucketno: %d - batchno: %d\n", bucketno, batchno);
 
 	/*
@@ -698,13 +782,13 @@ void NWayHashTableInsert(NWayHashTable **hashtable, TupleTableSlot *slot,
 	 */
 	if (batchno == (*hashtable)->curbatch)
 	{
-		printf("--> Insertion into Bucket\n");
+		//printf("--> Insertion into Bucket\n");
 		NWayHashTableInsertBucket(hashtable, slot, hashvalue, bucketno);
 	}
 	else
 	{
 		MinimalTuple tuple = ExecFetchSlotMinimalTuple(slot);
-		printf("#### Insertion into Batch\n");
+		//printf("#### Insertion into Batch\n");
 		/*
 		 * put the tuple into a temp file for later batches
 		 */
@@ -718,7 +802,7 @@ int NWayHashTableInsert2(NWayHashTable **hashtable, TupleTableSlot *slot,
 {
 	int bucketno, batchno;
 	NWayGetBucketAndBatch(*hashtable, hashvalue, &bucketno, &batchno);
-	printf("--> bucketno: %d - batchno: %d\n", bucketno, batchno);
+	//printf("--> bucketno: %d - batchno: %d\n", bucketno, batchno);
 
 	/*
 	 * decide whether to put the tuple in the hash table or a temp file
@@ -738,10 +822,103 @@ int NWayHashTableInsert2(NWayHashTable **hashtable, TupleTableSlot *slot,
 	return batchno;
 }
 
+bool NWayComputeActualJoinProbeTable2(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int attrNo1, int attrNo2, 
+				      Datum inKey, Datum *outKey, int *outBucket)
+{
+	int i;
+	for(i=0; i<hashtable->nbuckets; i++)
+	{
+		HashJoinTuple hashTuple = hashtable->buckets[i];
+
+		while (hashTuple != NULL)
+		{
+			Datum keyVal1, keyVal2;
+			bool isNull;
+			/* insert hashtable's tuple into exec slot so ExecQual sees it */
+			TupleTableSlot *inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple), tupSlot, false);	 /* do not pfree */
+
+			keyVal2 = slot_getattr(inntuple, attrNo2+1, &isNull);
+			//printf("Buckets[%d] - KeyVal1: %lu - HashValue1: %lu - KeyVal2: %lu\n", i, (unsigned long) keyVal1, (unsigned long) hashTuple->hashvalue, (unsigned long) keyVal2);
+			if ((unsigned long)keyVal2 == (unsigned long)inKey)
+			{
+				keyVal1 = slot_getattr(inntuple, attrNo1+1, &isNull);
+				(*outKey) = keyVal1;
+				(*outBucket) = i;
+				return true;
+			}
+
+			hashTuple = hashTuple->next;
+		}
+	}
+
+	return false;
+}
+
+bool NWayComputeActualJoinProbeTable1(NWayHashTable *hashtable, ExprContext *econtext, List *hashkeys, TupleTableSlot *tupSlot,
+		 		      int bucketno, Datum inKey)
+{
+	TupleTableSlot *inntuple;
+	HashJoinTuple hashTuple = hashtable->buckets[bucketno];
+
+	while (hashTuple != NULL)
+	{
+		Datum keyval;
+		inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple), tupSlot, false);	 /* do not pfree */
+		econtext->ecxt_innertuple = inntuple;
+		if( NWayGetKeyValue(econtext, hashkeys, hashtable->hashfunction, &keyval))
+		{
+			if ((unsigned long)keyval == (unsigned long)inKey)
+				return true;
+		}
+		hashTuple = hashTuple->next;
+	}
+	return false;
+}
+
+int NWayComputeActualJoin(NWayHashTable *hashtable1, ExprContext *econtext1, List *hashkeys1, TupleTableSlot *tupSlot1,
+		          NWayHashTable *hashtable2, TupleTableSlot *tupSlot2, int attr2No1, int attr2No2,
+			  NWayHashTable *hashtable3, TupleTableSlot *tupSlot3, int attr3)
+{
+	int i, count=0;
+
+	Assert (tupSlot1 != NULL);
+	Assert (tupSlot2 != NULL);
+	Assert (tupSlot3 != NULL);
+
+	for(i=0; i<hashtable3->nbuckets; i++)
+	{
+		HashJoinTuple hashTuple = hashtable3->buckets[i];
+
+		while (hashTuple != NULL)
+		{
+			Datum keyVal2, keyVal3;
+			bool isNull;
+			int tab2Bucket;
+
+			/* insert hashtable's tuple into exec slot so ExecQual sees it */
+			TupleTableSlot *inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple), tupSlot3, false);	 /* do not pfree */
+
+			keyVal3 = slot_getattr(inntuple, attr3+1, &isNull);
+			//printf("Buckets[%d] - KeyVal: %lu - HashValue: %lu\n", i, (unsigned long) keyVal, (unsigned long) hashTuple->hashvalue);
+			if (NWayComputeActualJoinProbeTable2(hashtable2, tupSlot2, attr2No1, attr2No2, keyVal3, &keyVal2, &tab2Bucket))
+			{
+				if (NWayComputeActualJoinProbeTable1(hashtable1, econtext1, hashkeys1, tupSlot1, tab2Bucket, keyVal2))
+					count++;
+			}
+
+			hashTuple = hashTuple->next;
+		}
+	}
+
+	return count;
+}
+
+
 void NWayPrintBuckets1(NWayHashTable *hashtable, ExprContext *econtext, List *hashkeys, TupleTableSlot *tupSlot)
 {
 	int i;
 
+/*
 	if(tupSlot == NULL)
 	{
 		printf("TupSlot is NULL\n");
@@ -749,6 +926,7 @@ void NWayPrintBuckets1(NWayHashTable *hashtable, ExprContext *econtext, List *ha
 	}
 	else
 		printf("TupSlot is not NULL\n");
+*/
 
 	for(i=0; i<hashtable->nbuckets; i++)
 	{
@@ -774,6 +952,7 @@ void NWayPrintBuckets2(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int at
 {
 	int i;
 
+/*
 	if(tupSlot == NULL)
 	{
 		printf("TupSlot is NULL\n");
@@ -781,6 +960,7 @@ void NWayPrintBuckets2(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int at
 	}
 	else
 		printf("TupSlot is not NULL\n");
+*/
 
 	for(i=0; i<hashtable->nbuckets; i++)
 	{
@@ -832,7 +1012,7 @@ bool NWayFindKeys(List *keys, PlanState *node, int *attrNo)
 			//		varExpr->varnoold, varExpr->varoattno);
 		}
 	}
-	printf("ActualAttr: %d\n", actualAttr);
+	//printf("ActualAttr: %d\n", actualAttr);
 	if(actualAttr == -1) // make sure we found the join key
 		return false;
 
@@ -844,7 +1024,7 @@ bool NWayFindKeys(List *keys, PlanState *node, int *attrNo)
 	{
 		int			varNumber = varNumbers[i] - 1;
 
-		printf("varNumber: %d \n", varNumber);
+		//printf("varNumber: %d \n", varNumber);
 		if (varNumber == actualAttr)
 		{
 			(*attrNo) = i;
@@ -909,7 +1089,7 @@ void NWayBuildHashTable2(NWayHashTable **hashtable, PlanState  *node, FmgrInfo  
 		keyVal2 = slot->tts_values[attr2];
 
 		NWayGetHashValueSimple(keyVal1, hashfunction, &hashvalue1);
-		printf("KeyVal1: %lu - HashValue1: %lu - KeyVal2: %lu\n", (unsigned long) keyVal1, (unsigned long) hashvalue1, (unsigned long) keyVal2);
+		//printf("KeyVal1: %lu - HashValue1: %lu - KeyVal2: %lu\n", (unsigned long) keyVal1, (unsigned long) hashvalue1, (unsigned long) keyVal2);
 		batchno = NWayHashTableInsert2(hashtable, slot, hashvalue1);
 
 		//NWayGetHashValueSimple(keyVal2, hashfunction, &hashvalue2);
@@ -928,7 +1108,7 @@ void NWayBuildHashTable2(NWayHashTable **hashtable, PlanState  *node, FmgrInfo  
 #endif
 	}
 
-	NWayPrintIndirectHashTable((*hashtable)->indirectHashTable, INDIRECT_HASH_TABLE_SIZE, (*hashtable)->nbatch);
+	//NWayPrintIndirectHashTable((*hashtable)->indirectHashTable, INDIRECT_HASH_TABLE_SIZE, (*hashtable)->nbatch);
 }
 
 void NWayBuildHashTable3(NWayHashTable **hashtable, PlanState *node, int **indirectHashTable, FmgrInfo hashfunction, int attrNo)
@@ -957,18 +1137,18 @@ void NWayHashTableInsert3(NWayHashTable **hashtable, TupleTableSlot *slot, Datum
 	NWayGetHashValueSimple(keyVal, hashfunction, &hashvalue);
 	idxNum = hashvalue%INDIRECT_HASH_TABLE_SIZE;
 
-	printf("KeyVal3: %lu - HashValue3: %lu - idxNum: %d\n", (unsigned long) keyVal, (unsigned long) hashvalue, idxNum);
+	//printf("KeyVal3: %lu - HashValue3: %lu - idxNum: %d\n", (unsigned long) keyVal, (unsigned long) hashvalue, idxNum);
 	for(i=0; i<(*hashtable)->nbatch; i++)
 	{
 		if (indirectHashTable[idxNum][i] == 1) // batch number 'i' is valid
 		{
-			printf("\tbatchNum: %d - ", i);
+			//printf("\tbatchNum: %d - ", i);
 			if (i==0)
 			{
 				int bucketno, batchno2;
 				NWayGetBucketAndBatch(*hashtable, hashvalue, &bucketno, &batchno2);
 				NWayHashTableInsertBucket(hashtable, slot, hashvalue, bucketno);
-				printf("BucketNo: %d\n", bucketno);
+				//printf("BucketNo: %d\n", bucketno);
 			}
 			else
 			{
@@ -978,7 +1158,7 @@ void NWayHashTableInsert3(NWayHashTable **hashtable, TupleTableSlot *slot, Datum
 				 */
 				Assert(i > (*hashtable)->curbatch);
 				ExecHashJoinSaveTuple(tuple, hashvalue, &(*hashtable)->batchFile[i]);
-				printf("\n");
+				//printf("\n");
 			}
 		}
 	}
@@ -988,6 +1168,7 @@ void NWayPrintBuckets3(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int at
 {
 	int i;
 
+/*
 	if(tupSlot == NULL)
 	{
 		printf("TupSlot is NULL\n");
@@ -995,6 +1176,7 @@ void NWayPrintBuckets3(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int at
 	}
 	else
 		printf("TupSlot is not NULL\n");
+*/
 
 	for(i=0; i<hashtable->nbuckets; i++)
 	{
@@ -1008,7 +1190,7 @@ void NWayPrintBuckets3(NWayHashTable *hashtable, TupleTableSlot *tupSlot, int at
 			TupleTableSlot *inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple), tupSlot, false);	 /* do not pfree */
 
 			keyVal = slot_getattr(inntuple, attrNo+1, &isNull);
-			printf("Buckets[%d] - KeyVal: %lu - HashValue: %lu\n", i, (unsigned long) keyVal, (unsigned long) hashTuple->hashvalue);
+			//printf("Buckets[%d] - KeyVal: %lu - HashValue: %lu\n", i, (unsigned long) keyVal, (unsigned long) hashTuple->hashvalue);
 
 			hashTuple = hashTuple->next;
 		}
