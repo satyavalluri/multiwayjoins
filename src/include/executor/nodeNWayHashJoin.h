@@ -22,6 +22,21 @@
 //#define INDIRECT_HASH_TABLE_SIZE 65536
 //#define INDIRECT_HASH_TABLE_SIZE 2097152
 #define INDIRECT_HASH_TABLE_SIZE 4194304
+#define BIT_WIDTH 32
+#define IHT_BUCKET_PARTS 1
+#define PROBE_BATCH_SIZE 5000
+
+typedef struct IndirectHashTable
+{
+	long *cols;
+	long **bucketids;
+}IndirectHashTable;
+
+//typedef struct IndirectHashTableCell
+//{
+	//bool isPresent;
+	//List *bucketID;
+//}IndirectHashTableCell;
 
 typedef struct NWayHashTable
 {
@@ -45,7 +60,9 @@ typedef struct NWayHashTable
  	 */
         BufFile   **batchFile; /* buffered virtual temp file per batch */
 
-        int **indirectHashTable;
+        IndirectHashTable *indirectHashTable; // nbatches
+	int ihtWidthCols;
+	int ihtWidthBucketIDs;
 
         /*
  	 * Info about the datatype-specific hash functions for the datatypes being
