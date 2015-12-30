@@ -26,6 +26,8 @@
 #define IHT_BUCKET_PARTS 1
 #define PROBE_BATCH_SIZE 5000
 
+typedef unsigned long long int ullong;
+
 typedef struct IndirectHashTable
 {
 	long *cols;
@@ -51,6 +53,7 @@ typedef struct NWayHashTable
 
         double          totalTuples;    /* # tuples obtained from inner plan */
         int			      curbatch;		/* current batch #; 0 during 1st pass */
+	double          numBucketTuples;
 
         /* These arrays are allocated for the life of the hash join, but only if
 	 * nbatch > 1.  A file is opened only when we first write a tuple into it
